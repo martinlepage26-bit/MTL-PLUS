@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Montréal+</string>
+    <string name="title_activity_main">Montréal+</string>
+    <string name="package_name">ca.pharosai.montrealplus</string>
+    <string name="custom_url_scheme">ca.pharosai.montrealplus</string>
+</resources>

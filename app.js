@@ -1,3 +1,5 @@
+import { initBilling, purchasePlan, billing } from './billing.js'
+
 const state = {
   view: 'home',
   borough: 'Rosemont-La Petite-Patrie',
@@ -110,7 +112,25 @@ function startProject(title) {
   render()
 }
 
-function upgrade(plan) {
+async function upgrade(plan) {
+  if (plan === 'Free') {
+    state.plan = 'Free'
+    render()
+    return
+  }
+  // Native build: launch a real Google Play subscription. The plan is applied
+  // by the billing callback (applyPlan) only after the purchase is verified.
+  if (billing.available) {
+    await purchasePlan(plan)
+    return
+  }
+  // Browser / PWA preview: keep the demo unlock so the web build stays usable.
+  state.plan = plan
+  render()
+}
+
+// Called by billing.js when an owned entitlement is detected or changes.
+function applyPlan(plan) {
   state.plan = plan
   render()
 }
@@ -348,6 +368,14 @@ function bind() {
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').catch(() => {})
+}
+
+// Wire Google Play billing. In the native app cordova plugins are ready at
+// `deviceready`; in the browser there is no bridge, so billing stays a no-op.
+if (typeof window !== 'undefined' && window.cordova) {
+  document.addEventListener('deviceready', () => initBilling(applyPlan), { once: true })
+} else {
+  initBilling(applyPlan)
 }
 
 render()

@@ -5,7 +5,19 @@
   "type": "module",
   "scripts": {
     "start": "python3 -m http.server 4173 --bind 0.0.0.0",
-    "build": "rm -rf dist && mkdir dist && cp index.html styles.css app.js manifest.webmanifest sw.js dist/",
-    "check": "node --check app.js"
+    "build": "rm -rf dist && mkdir dist && cp index.html styles.css app.js billing.js manifest.webmanifest sw.js dist/",
+    "sync": "npm run build && npx cap sync android",
+    "icons": "node tools/gen-icons.mjs && npx capacitor-assets generate --android",
+    "check": "node --check app.js && node --check billing.js"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.6.7",
+    "@capacitor/cli": "^7.6.7",
+    "@capacitor/core": "^7.6.7",
+    "cordova-plugin-purchase": "^13.17.2"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "sharp": "^0.35.2"
   }
 }

@@ -1,3 +1,10 @@
 node_modules/
 dist/
 .DS_Store
+
+# Android signing — NEVER commit keys
+*.keystore
+*.jks
+android/keystore.properties
+android/key.properties
+android/local.properties
