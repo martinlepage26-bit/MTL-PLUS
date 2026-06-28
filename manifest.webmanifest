@@ -1,0 +1,17 @@
+{
+  "name": "Montréal+",
+  "short_name": "Montréal+",
+  "description": "A civic operating assistant for Montréal residents, property owners, and local professionals.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#07111f",
+  "theme_color": "#0a7cff",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='192' height='192' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' rx='44' fill='%230a7cff'/%3E%3Cpath d='M45 118L96 36l51 82H45z' fill='white'/%3E%3Cpath d='M64 130h64v18H64z' fill='white'/%3E%3C/svg%3E",
+      "sizes": "192x192",
+      "type": "image/svg+xml"
+    }
+  ]
+}
