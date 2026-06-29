@@ -1,16 +1,9 @@
-// billing.js — Google Play subscription unlock for Montréal+.
+// billing.js — Unified billing for Montréal+ (Android + iOS).
 //
-// Uses cordova-plugin-purchase (CdvPurchase v13), which talks DIRECTLY to
-// Google Play Billing — no third-party service. In a plain browser (no native
-// bridge) every function no-ops and `billing.available` stays false, so the web
-// preview keeps its demo behaviour.
-//
-// NOT YET TESTED ON A DEVICE. The purchase/verify flow can only be exercised on
-// a real Android build with the products live in Play Console. Treat the order/
-// reconcile paths as reviewed-but-unverified until that test passes.
-//
-// Play Console setup (see PLAY_STORE.md): create three SUBSCRIPTION products
-// with exactly these IDs, each with a base plan, then add a license tester.
+// Detects platform at runtime and delegates to the appropriate adapter:
+// - Android: cordova-plugin-purchase (Google Play Billing)
+// - iOS: @capacitor-community/in-app-purchases (StoreKit 2)
+// - Browser: no-op (demo mode)
 
 export const PLAN_PRODUCTS = {
   Household: 'montrealplus.sub.household',
@@ -20,63 +13,64 @@ export const PLAN_PRODUCTS = {
 
 const TIER_RANK = { Free: 0, Household: 1, Pro: 2, Team: 3 }
 
-export const billing = { available: false, ready: false, _onChange: null }
+export const billing = { available: false, ready: false, _onChange: null, _platform: null }
 
-function bridge() {
-  return (typeof window !== 'undefined' && window.CdvPurchase) ? window.CdvPurchase : null
+function detectPlatform() {
+  if (typeof window === 'undefined') return 'browser'
+  if (window.CdvPurchase) return 'android'
+  if (window.CapacitorInAppPurchases) return 'ios'
+  // Capacitor platform detection
+  if (window.Capacitor?.getPlatform) {
+    const p = window.Capacitor.getPlatform()
+    if (p === 'android') return 'android'
+    if (p === 'ios') return 'ios'
+  }
+  return 'browser'
 }
 
-function isOwned(store, id) {
+// --- Android adapter (cordovan-plugin-purchase) ---
+function isOwnedAndroid(store, id) {
   try {
     if (typeof store.owned === 'function') return store.owned(id)
     const product = store.get(id)
     return !!(product && product.owned)
-  } catch {
-    return false
-  }
+  } catch { return false }
 }
 
-// Notify the app of the highest-tier plan currently owned (or 'Free').
-function reconcile(store) {
+function reconcileAndroid(store) {
   const best = Object.entries(PLAN_PRODUCTS)
-    .filter(([, id]) => isOwned(store, id))
+    .filter(([, id]) => isOwnedAndroid(store, id))
     .map(([plan]) => plan)
     .sort((a, b) => TIER_RANK[b] - TIER_RANK[a])[0] || 'Free'
   if (billing._onChange) billing._onChange(best)
 }
 
-// Initialise billing. `onChange(planName)` fires after any verified purchase or
-// restore. Resolves true when native billing is wired, false in the browser.
-export async function initBilling(onChange) {
+async function initAndroid(onChange) {
   billing._onChange = onChange
-  const CdvPurchase = bridge()
+  const CdvPurchase = window.CdvPurchase
   if (!CdvPurchase) return false
 
   billing.available = true
   const { store, ProductType, Platform } = CdvPurchase
 
   store.register(Object.values(PLAN_PRODUCTS).map(id => ({
-    id,
-    type: ProductType.PAID_SUBSCRIPTION,
-    platform: Platform.GOOGLE_PLAY
+    id, type: ProductType.PAID_SUBSCRIPTION, platform: Platform.GOOGLE_PLAY
   })))
 
   store.when()
     .approved(t => t.verify())
-    .verified(receipt => { receipt.finish(); reconcile(store) })
-    .unverified(() => reconcile(store))
-    .receiptUpdated(() => reconcile(store))
+    .verified(receipt => { receipt.finish(); reconcileAndroid(store) })
+    .unverified(() => reconcileAndroid(store))
+    .receiptUpdated(() => reconcileAndroid(store))
 
   await store.initialize([Platform.GOOGLE_PLAY])
   billing.ready = true
-  reconcile(store)
+  reconcileAndroid(store)
   return true
 }
 
-// Start a subscription purchase for a plan name.
-// Resolves true if an order was launched, false if billing isn't usable here.
-export async function purchasePlan(planName) {
-  const CdvPurchase = bridge()
+async function purchaseAndroid(planName) {
+  const CdvPurchase = window.CdvPurchase
   const productId = PLAN_PRODUCTS[planName]
   if (!CdvPurchase || !productId) return false
   const product = CdvPurchase.store.get(productId, CdvPurchase.Platform.GOOGLE_PLAY)
@@ -86,10 +80,85 @@ export async function purchasePlan(planName) {
   return true
 }
 
-// Restore previously purchased subscriptions ("Restore purchases" button).
-export async function restorePurchases() {
-  const CdvPurchase = bridge()
+async function restoreAndroid() {
+  const CdvPurchase = window.CdvPurchase
   if (!CdvPurchase) return false
   await CdvPurchase.store.restorePurchases()
   return true
+}
+
+// --- iOS adapter (@capacitor-community/in-app-purchases) ---
+function reconcileIOS(products) {
+  const best = Object.entries(PLAN_PRODUCTS)
+    .filter(([, id]) => {
+      const p = products?.find(pr => pr.productId === id)
+      return p && p.owned
+    })
+    .map(([plan]) => plan)
+    .sort((a, b) => TIER_RANK[b] - TIER_RANK[a])[0] || 'Free'
+  if (billing._onChange) billing._onChange(best)
+}
+
+async function initIOS(onChange) {
+  billing._onChange = onChange
+  const IAP = window.CapacitorInAppPurchases
+  if (!IAP) return false
+
+  billing.available = true
+  try {
+    await IAP.initialize()
+    const { products } = await IAP.getProducts({ productIds: Object.values(PLAN_PRODUCTS) })
+    IAP.addListener('purchaseEvent', (event) => reconcileIOS(event.products))
+    const { entitlements } = await IAP.restorePurchases()
+    billing.ready = true
+    reconcileIOS(products)
+    if (entitlements) reconcileIOS(entitlements)
+    return true
+  } catch (err) {
+    console.error('[billing-ios] init failed:', err)
+    return false
+  }
+}
+
+async function purchaseIOS(planName) {
+  const IAP = window.CapacitorInAppPurchases
+  const productId = PLAN_PRODUCTS[planName]
+  if (!IAP || !productId) return false
+  try {
+    await IAP.purchase({ productId })
+    return true
+  } catch (err) {
+    console.error('[billing-ios] purchase failed:', err)
+    return false
+  }
+}
+
+async function restoreIOS() {
+  const IAP = window.CapacitorInAppPurchases
+  if (!IAP) return false
+  try {
+    const { entitlements } = await IAP.restorePurchases()
+    reconcileIOS(entitlements)
+    return true
+  } catch { return false }
+}
+
+// --- Unified API ---
+export async function initBilling(onChange) {
+  billing._platform = detectPlatform()
+  if (billing._platform === 'android') return initAndroid(onChange)
+  if (billing._platform === 'ios') return initIOS(onChange)
+  return false
+}
+
+export async function purchasePlan(planName) {
+  if (billing._platform === 'android') return purchaseAndroid(planName)
+  if (billing._platform === 'ios') return purchaseIOS(planName)
+  return false
+}
+
+export async function restorePurchases() {
+  if (billing._platform === 'android') return restoreAndroid()
+  if (billing._platform === 'ios') return restoreIOS()
+  return false
 }
