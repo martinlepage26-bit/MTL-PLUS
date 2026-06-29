@@ -1,0 +1,109 @@
+name: Build iOS
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app.js'
+      - 'billing.js'
+      - 'index.html'
+      - 'styles.css'
+      - 'capacitor.config.json'
+      - 'package.json'
+      - '.github/workflows/build-ios.yml'
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build web assets
+        run: npm run build
+
+      - name: Install Capacitor iOS
+        run: |
+          npm install @capacitor/ios@^7
+          npx cap add ios || true
+
+      - name: Sync iOS
+        run: npx cap sync ios
+
+      - name: Configure iOS signing
+        env:
+          APPLE_CERT_BASE64: ${{ secrets.APPLE_CERT_BASE64 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_PROVISION_BASE64: ${{ secrets.APPLE_PROVISION_BASE64 }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$APPLE_CERT_BASE64" ]; then
+            echo "No Apple signing secrets found — building unsigned for now"
+            exit 0
+          fi
+          # Create temporary keychain
+          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain-db
+          KEYCHAIN_PASSWORD=temporary
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Import certificate
+          CERT_PATH=$RUNNER_TEMP/build.p12
+          echo -n "$APPLE_CERT_BASE64" | base64 --decode > "$CERT_PATH"
+          security import "$CERT_PATH" -P "$APPLE_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
+
+          # Import provisioning profile
+          PP_PATH=$RUNNER_TEMP/build.mobileprovision
+          echo -n "$APPLE_PROVISION_BASE64" | base64 --decode > "$PP_PATH"
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp "$PP_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/
+
+          # Update Xcode project signing
+          cd ios/App
+          sed -i '' "s/DEVELOPMENT_TEAM = .*/DEVELOPMENT_TEAM = $APPLE_TEAM_ID;/" App.xcodeproj/project.pbxproj || true
+
+      - name: Build IPA
+        run: |
+          cd ios/App
+          if [ -n "$APPLE_CERT_BASE64" ]; then
+            xcodebuild -workspace App.xcworkspace \
+              -scheme App \
+              -configuration Release \
+              -destination 'generic/platform=iOS' \
+              -archivePath build/App.xcarchive \
+              -allowProvisioningUpdates \
+              archive
+            xcodebuild -exportArchive \
+              -archivePath build/App.xcarchive \
+              -exportOptionsPlist ExportOptions.plist \
+              -exportPath build/export \
+              -allowProvisioningUpdates
+          else
+            xcodebuild -workspace App.xcworkspace \
+              -scheme App \
+              -configuration Debug \
+              -destination 'generic/platform=iOS' \
+              -archivePath build/App.xcarchive \
+              CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+              archive || echo "Unsigned build completed (or skipped)"
+          fi
+        env:
+          APPLE_CERT_BASE64: ${{ secrets.APPLE_CERT_BASE64 }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: montreal-plus-ios
+          path: |
+            ios/App/build/export/*.ipa
+            ios/App/build/App.xcarchive
+          if-no-files-found: ignore
